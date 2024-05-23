@@ -86,6 +86,8 @@ class VideoTracker(QObject):
                 break
             processed_frame, results = self.track_objects(frame)
             self.frame_queue.task_done()
+            ## code needs to go in here
+            
             self.put_processed_frame_in_queue(processed_frame)
             self.process_results_and_update_ids(results, seen_ids, frame)
 
