@@ -1,36 +1,21 @@
-import os
-import sys
-import random
+import cv2
+import queue
+import threading
+import ultralytics
+from typing import Callable, Union
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 import numpy as np
-import cv2
-import queue
-import threading
-import ultralytics
-from typing import Callable, Union
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QFileDialog, QLabel, QVBoxLayout, QWidget
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QImage, QPixmap
+import os
 
+class VideoTracker(QObject):
+    frame_ready = pyqtSignal(np.ndarray)
+    status_update = pyqtSignal(str)
+    object_count_update = pyqtSignal(int)
 
-class DummyComparator:
-    def compare(self, image: np.ndarray) -> str:
-        return random.choice(["Good", "Bad"])
-
-import cv2
-import queue
-import threading
-import ultralytics
-from typing import Callable, Union
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QVBoxLayout, QWidget, QFileDialog
-
-class VideoTracker:
-    def __init__(self, model: ultralytics.YOLO, comparator: Callable[[np.ndarray], str], status_label: QLabel, video_label: QLabel, frame_rate: int = 30, scan_line: int = 100):
+    def __init__(self, model: ultralytics.YOLO, comparator: Callable[[np.ndarray], str], frame_rate: int = 30, scan_line: int = 100):
+        super().__init__()
         self.model = model
         self.comparator = comparator
-        self.status_label = status_label
-        self.video_label = video_label
         self.frame_queue = queue.Queue(maxsize=10)
         self.processed_frame_queue = queue.Queue(maxsize=10)
         self.crop_queue = queue.Queue(maxsize=50)
@@ -40,10 +25,6 @@ class VideoTracker:
         self.detection_tags = {}
         self.scan_line = scan_line  # Y-coordinate of the scan line
         self.setup_threads()
-
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_frame)
-        self.timer.start(int(1000 / self.frame_rate))
 
     def setup_threads(self):
         self.capture_thread = None
@@ -146,7 +127,7 @@ class VideoTracker:
             seen_ids.add(id_)
             self.detection_tags[id_] = result
             self.object_count += 1
-            self.status_label.setText(f'Total Objects Detected: {self.object_count}')
+            self.object_count_update.emit(self.object_count)
         except queue.Full:
             pass
 
@@ -186,77 +167,20 @@ class VideoTracker:
             self.capture_thread.join()
         if self.process_thread is not None:
             self.process_thread.join()
-            
-        self.status_label.setText('Tracking stopped.')
-        
+        self.status_update.emit('Tracking stopped.')
 
-    def select_video(self):
-        options = QFileDialog.Options()
-        options |= QFileDialog.ReadOnly
-        file_name, _ = QFileDialog.getOpenFileName(None, 'Select Video File', '', 'Video Files (*.avi *.mp4)', options=options)
-        if file_name:
-            self.status_label.setText(f'Tracking video: {file_name}')
-            self.start_tracking(file_name)
-
+    @pyqtSlot()
     def update_frame(self):
         if not self.processed_frame_queue.empty():
             frame = self.processed_frame_queue.get()
             if frame is None:
-                self.status_label.setText('Tracking completed.')
+                self.status_update.emit('Tracking completed.')
                 self.stop_tracking()
                 return
             frame = self.postprocess_frame(frame)
-            self.display_frame(frame)
+            self.frame_ready.emit(frame)
             self.processed_frame_queue.task_done()
 
     def postprocess_frame(self, frame: np.ndarray) -> np.ndarray:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         return frame
-
-    def display_frame(self, frame: np.ndarray):
-        height, width, channel = frame.shape
-        step = channel * width
-        qImg = QImage(frame.data, width, height, step, QImage.Format_RGB888)
-        self.video_label.setPixmap(QPixmap.fromImage(qImg))
-
-
-class VideoTrackerApp(QMainWindow):
-    def __init__(self, model_path: str):
-        super().__init__()
-        self.model = ultralytics.YOLO(model_path)
-        self.comparator = DummyComparator().compare
-        self.initUI()        
-        self.video_tracker = VideoTracker(self.model, self.comparator, self.status_label, self.video_label)
-        self.select_button.clicked.connect(self.video_tracker.select_video)
-        self.stop_button.clicked.connect(self.video_tracker.stop_tracking)
-
-
-    def initUI(self):
-        self.setWindowTitle('Video Tracker')
-        self.setGeometry(100, 100, 800, 600)
-
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-
-        self.layout = QVBoxLayout(self.central_widget)
-
-        self.select_button = QPushButton('Select Video', self)
-        self.layout.addWidget(self.select_button)
-
-        self.stop_button = QPushButton('Stop', self)
-        self.layout.addWidget(self.stop_button)
-
-        self.video_label = QLabel(self)
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.layout.addWidget(self.video_label)
-
-        self.status_label = QLabel('Select a video to start tracking.', self)
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.layout.addWidget(self.status_label)
-        
-
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    main_window = VideoTrackerApp('models/best.pt')
-    main_window.show()
-    sys.exit(app.exec_())
