@@ -1,0 +1,6 @@
+data
+yolo5
+__pycache__
+*.jpg
+*.png
+*.pt
