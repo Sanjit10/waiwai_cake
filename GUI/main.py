@@ -1,15 +1,20 @@
 from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QVBoxLayout, QWidget, QFileDialog
-from PyQt5.QtCore import Qt, QThread, QTimer
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 from video_tracker import VideoTracker
-import sys, random, ultralytics
+import sys
+import ultralytics
 import numpy as np
+import time
+from all_masker import mask_image
+import cv2
 
 class VideoTrackerApp(QMainWindow):
     def __init__(self, model_path, frame_rate=30):
         super().__init__()
         self.model = ultralytics.YOLO(model_path)
-        self.tracker = VideoTracker(self.model, self.compare_function, frame_rate=frame_rate)
+        self.mask_image = mask_image('GUI/hsv_highlighter.pkl')
+        self.tracker = VideoTracker(self.model, self.mask_image.highlighter, frame_rate=frame_rate)
         self.initUI()
         self.tracker_thread = QThread()
         self.tracker.moveToThread(self.tracker_thread)
@@ -18,6 +23,8 @@ class VideoTrackerApp(QMainWindow):
         self.tracker.frame_ready.connect(self.display_frame)
         self.tracker.status_update.connect(self.update_status)
         self.tracker.object_count_update.connect(self.update_object_count)
+
+        self.prev_frame_time = None  # Initialize the previous frame time
 
     def initUI(self):
         self.setWindowTitle('Video Tracker')
@@ -39,6 +46,10 @@ class VideoTrackerApp(QMainWindow):
         self.video_label = QLabel(self)
         self.video_label.setAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.video_label)
+        
+        self.frame_label = QLabel(self)
+        self.frame_label.setAlignment(Qt.AlignCenter)
+        self.layout.addWidget(self.frame_label)
 
         self.status_label = QLabel('Select a video to start tracking.', self)
         self.status_label.setAlignment(Qt.AlignCenter)
@@ -57,6 +68,14 @@ class VideoTrackerApp(QMainWindow):
             self.tracker.start_tracking(file_name)
 
     def display_frame(self, frame: np.ndarray):
+        current_time = time.time()
+        if self.prev_frame_time is not None:
+            time_diff = current_time - self.prev_frame_time
+            frame_rate = 1.0 / time_diff
+            self.frame_label.setText(f'Frame Rate: {frame_rate:.2f} FPS')
+
+        self.prev_frame_time = current_time
+
         height, width, channel = frame.shape
         step = channel * width
         qImg = QImage(frame.data, width, height, step, QImage.Format_RGB888)
@@ -67,10 +86,6 @@ class VideoTrackerApp(QMainWindow):
 
     def update_object_count(self, count: int):
         self.status_label.setText(f'Total Objects Detected: {count}')
-
-    def compare_function(self, image: np.ndarray) -> str:
-        # Dummy comparator function
-        return random.choice(["Good", "Bad"])
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
